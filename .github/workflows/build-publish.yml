@@ -34,7 +34,7 @@ jobs:
         CADDY_VERSION=${{ vars.CADDY_VERSION }}
         CADDY_CF_DNS_VERSION=${{ vars.CADDY_CF_DNS_VERSION }}
       push: true
-      meta-images: gfrancesco11/app
+      meta-images: gfrancesco11/caddy-plugins
       meta-tags: |
         type=semver,pattern={{version}},value=${{ vars.CADDY_VERSION }}
     secrets:

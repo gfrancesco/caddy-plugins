@@ -1,21 +1,61 @@
 name: ci/cd
 
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-on: workflow_dispatch
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
 
 permissions:
   contents: read
 
 jobs:
-  build:
-    uses: docker/github-builder/.github/workflows/build.yml@v1
+  set-env-caddy-v:
+    name: Set numeric only Caddy version variable
+    runs-on: ubuntu-latest
+    env:
+      caddy_v_num: ${{ github.ref_name }}
+    outputs:
+      out1: ${{ steps.step1.outputs.caddy_v_num }}
+    steps:
+      - id: step1
+        run: echo "caddy_v_num=${caddy_v_num#v}" >> "$GITHUB_OUTPUT"
+
+  build-local:
+    name: Build local files
+    needs: set-env-caddy-v
     permissions:
       contents: read # to fetch the repository content
       id-token: write # for signing attestation(s) with GitHub OIDC Token
+    uses: docker/github-builder/.github/workflows/build.yml@v1
+    with:
+      output: local
+      artifact-upload: true
+      artifact-name: build-caddy-bin
+      sign: false
+      platforms: >-
+        linux/amd64,
+        linux/arm64/v8,
+        linux/arm/v7,
+        linux/arm/v6,
+        linux/ppc64le,
+        linux/riscv64,
+        linux/s390x
+      file: caddy-plugins.Dockerfile
+      build-args: |
+        GO_IMAGE_VERSION=${{ vars.GO_IMAGE_VERSION }}
+        XCADDY_VERSION=${{ vars.XCADDY_VERSION }}
+        ALPINE_VERSION=${{ vars.ALPINE_VERSION }}
+        CADDY_VERSION=${{ github.ref_name }}
+        CADDY_CF_DNS_VERSION=${{ vars.CADDY_CF_DNS_VERSION }}
+        CADDY_L4_VERSION=${{ vars.CADDY_L4_VERSION }}
+
+  build-images:
+    name: Build dockerhub images
+    needs: set-env-caddy-v
+    permissions:
+      contents: read # to fetch the repository content
+      id-token: write # for signing attestation(s) with GitHub OIDC Token
+    uses: docker/github-builder/.github/workflows/build.yml@v1
     with:
       output: image
       platforms: >-
@@ -31,14 +71,56 @@ jobs:
         GO_IMAGE_VERSION=${{ vars.GO_IMAGE_VERSION }}
         XCADDY_VERSION=${{ vars.XCADDY_VERSION }}
         ALPINE_VERSION=${{ vars.ALPINE_VERSION }}
-        CADDY_VERSION=${{ vars.CADDY_VERSION }}
+        CADDY_VERSION=${{ github.ref_name }}
         CADDY_CF_DNS_VERSION=${{ vars.CADDY_CF_DNS_VERSION }}
+        CADDY_L4_VERSION=${{ vars.CADDY_L4_VERSION }}
       push: true
       meta-images: gfrancesco11/caddy-plugins
       meta-tags: |
-        type=semver,pattern={{version}},value=${{ vars.CADDY_VERSION }}
+        type=semver,pattern={{version}},value=${{ needs.set-env-caddy-v.outputs.out1 }}
     secrets:
       registry-auths: |
         - registry: docker.io
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  release:
+    needs: build-local
+    if: github.ref_type == 'tag'
+    name: Create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # for signing attestation(s) with GitHub OIDC Token
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v8
+      with:
+        path: artifacts
+        name: build-caddy-bin
+    - name: Rename binaries for release
+      run: |
+        arr_folders=(artifacts/*)
+        for i in "${arr_folders[@]}"
+        do :
+           MV_CMD="artifacts/$(echo $i | cut -c 11-)/usr/bin/caddy caddy-plugins-bin-$(echo $i | cut -c 11-)-${{ github.ref_name }}"
+           mv ${MV_CMD}
+        done
+    - name: Release
+      uses: softprops/action-gh-release@v3
+      with:
+        files: |
+          caddy-plugins-bin*
+        body: |
+          ## Plugins
+          - Cloudflare DNS @ `${{ vars.CADDY_CF_DNS_VERSION }}`
+          - Layer 4 @ `${{ vars.CADDY_L4_VERSION }}`
+
+          ## Images
+          [Docker HUB: gfrancesco11/caddy-plugins](https://hub.docker.com/r/gfrancesco11/caddy-plugins/tags)
+
+          ## Build and image dependencies
+          - `alpine:${{ vars.ALPINE_VERSION }}`
+          - `golang:${{ vars.GO_IMAGE_VERSION }}`
+          - `github.com/caddyserver/xcaddy:${{ vars.XCADDY_VERSION }}`
+
+

@@ -9,15 +9,21 @@ ARG ALPINE_VERSION
 ARG CADDY_VERSION
 # https://github.com/caddy-dns/cloudflare/tags
 ARG CADDY_CF_DNS_VERSION
-
+# https://github.com/mholt/caddy-l4/tags
+ARG CADDY_L4_VERSION
 
 FROM golang:${GO_IMAGE_VERSION} AS builder
 
 ARG XCADDY_VERSION
 ARG CADDY_CF_DNS_VERSION
+ARG CADDY_L4_VERSION
+
+# Used by xcaddy to select which version of Caddy to build
+ARG CADDY_VERSION
 
 # Configures xcaddy to not clean up post-build (unnecessary in a container)
 ENV XCADDY_SKIP_CLEANUP=1
+
 # Sets capabilities for output caddy binary to be able to bind to privileged ports
 ENV XCADDY_SETCAP=1
 
@@ -40,16 +46,12 @@ RUN set -eux; \
         s390x)   binArch='s390x' ;; \
         *) echo >&2 "error: unsupported architecture ($apkArch)"; exit 1 ;;\
     esac; \
-    wget -O /tmp/xcaddy.tar.gz "https://github.com/caddyserver/xcaddy/releases/download/v${XCADDY_VERSION}/xcaddy_${XCADDY_VERSION}_linux_${binArch}.tar.gz"; \
-    tar x -z -f /tmp/xcaddy.tar.gz -C /usr/bin xcaddy; \
-    rm -f /tmp/xcaddy.tar.gz; \
-    chmod +x /usr/bin/xcaddy;
+    go install github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION}
 
 WORKDIR /usr/bin
-
-RUN xcaddy build \
-    --with github.com/caddy-dns/cloudflare@${CADDY_CF_DNS_VERSION}
-
+RUN xcaddy build ${CADDY_VERSION} \
+    --with github.com/caddy-dns/cloudflare@${CADDY_CF_DNS_VERSION} \
+    --with github.com/mholt/caddy-l4@${CADDY_L4_VERSION}
 
 
 ### second stage for dist image
@@ -77,14 +79,14 @@ RUN --mount=target=/tmp/builder,from=builder,source=/usr/bin cp /tmp/builder/cad
     chmod 1777 /config/caddy /data/caddy; \
     setcap cap_net_bind_service=+ep /usr/bin/caddy; \
     chmod +x /usr/bin/caddy; \
-    wget -O /etc/caddy/Caddyfile "https://raw.githubusercontent.com/caddyserver/dist/refs/tags/v${CADDY_VERSION}/config/Caddyfile"; \
-    wget -O /usr/share/caddy/index.html "https://raw.githubusercontent.com/caddyserver/dist/refs/tags/v${CADDY_VERSION}/welcome/index.html"
+    wget -O /etc/caddy/Caddyfile "https://raw.githubusercontent.com/caddyserver/dist/refs/tags/${CADDY_VERSION}/config/Caddyfile"; \
+    wget -O /usr/share/caddy/index.html "https://raw.githubusercontent.com/caddyserver/dist/refs/tags/${CADDY_VERSION}/welcome/index.html"
 
 # See https://caddyserver.com/docs/conventions#file-locations for details
 ENV XDG_CONFIG_HOME=/config
 ENV XDG_DATA_HOME=/data
 
-LABEL org.opencontainers.image.version=v${CADDY_VERSION}
+LABEL org.opencontainers.image.version=${CADDY_VERSION}
 LABEL org.opencontainers.image.title=Caddy
 LABEL org.opencontainers.image.description="multi platform linux images for Caddy with custom plugin(s)"
 LABEL org.opencontainers.image.url=https://caddyserver.com
